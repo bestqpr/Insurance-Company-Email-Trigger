@@ -1,0 +1,12 @@
+{
+  "name": "monday-insurance-webhook",
+  "version": "1.0.0",
+  "description": "Webhook to auto-fill Insurance Email from connected Insurance Company",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
