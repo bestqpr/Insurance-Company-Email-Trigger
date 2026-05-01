@@ -12,6 +12,8 @@ const NEGOTIATIONS_RELATION_COL = "board_relation_mm2yqw4f";
 const NEGOTIATIONS_EMAIL_COL = "email_mkyf3b46";
 const INSURANCE_EMAIL_COL = "email_mm2yqfsx";
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function mondayQuery(query) {
   const response = await fetch("https://api.monday.com/v2", {
     method: "POST",
@@ -22,13 +24,46 @@ async function mondayQuery(query) {
     },
     body: JSON.stringify({ query }),
   });
-  const data = await response.json();
-  console.log("API response:", JSON.stringify(data));
-  return data;
+  return response.json();
+}
+
+async function getConnectedInsuranceId(itemId, relationColId) {
+  const query = `{
+    items(ids: [${itemId}]) {
+      column_values(ids: ["${relationColId}"]) {
+        value
+        ... on BoardRelationValue {
+          linked_item_ids
+        }
+      }
+    }
+  }`;
+  const result = await mondayQuery(query);
+  console.log("Relation result:", JSON.stringify(result));
+
+  const colVal = result?.data?.items?.[0]?.column_values?.[0];
+  if (!colVal) return null;
+
+  if (colVal.linked_item_ids && colVal.linked_item_ids.length > 0) {
+    return String(colVal.linked_item_ids[0]);
+  }
+
+  if (colVal.value) {
+    try {
+      const parsed = JSON.parse(colVal.value);
+      const linkedIds = parsed.linkedPulseIds || [];
+      if (linkedIds.length > 0) {
+        return String(linkedIds[0].linkedPulseId || linkedIds[0]);
+      }
+    } catch(e) {
+      console.log("Parse error:", e.message);
+    }
+  }
+
+  return null;
 }
 
 async function getInsuranceEmail(insuranceItemId) {
-  console.log("Fetching email for insurance item:", insuranceItemId);
   const query = `{
     items(ids: [${insuranceItemId}]) {
       name
@@ -39,49 +74,18 @@ async function getInsuranceEmail(insuranceItemId) {
     }
   }`;
   const result = await mondayQuery(query);
-  const item = result?.data?.items?.[0];
-  console.log("Insurance item:", JSON.stringify(item));
-  const colVal = item?.column_values?.[0];
-  if (!colVal || !colVal.value) {
-    console.log("No email value found");
-    return null;
-  }
+  console.log("Insurance result:", JSON.stringify(result));
+  const colVal = result?.data?.items?.[0]?.column_values?.[0];
+  if (!colVal || !colVal.value) return null;
   try {
     const parsed = JSON.parse(colVal.value);
-    console.log("Parsed email value:", parsed);
     return parsed.email || null;
   } catch {
     return colVal.text || null;
   }
 }
 
-async function getConnectedInsuranceId(itemId, relationColId) {
-  console.log("Fetching connected insurance for item:", itemId);
-  const query = `{
-    items(ids: [${itemId}]) {
-      name
-      column_values(ids: ["${relationColId}"]) {
-        value
-      }
-    }
-  }`;
-  const result = await mondayQuery(query);
-  const colVal = result?.data?.items?.[0]?.column_values?.[0];
-  console.log("Relation column value:", JSON.stringify(colVal));
-  if (!colVal || !colVal.value) return null;
-  try {
-    const parsed = JSON.parse(colVal.value);
-    console.log("Parsed relation:", JSON.stringify(parsed));
-    const linkedIds = parsed.linkedPulseIds || [];
-    return linkedIds.length > 0 ? linkedIds[0].linkedPulseId : null;
-  } catch (e) {
-    console.log("Parse error:", e.message);
-    return null;
-  }
-}
-
 async function updateInsuranceEmail(itemId, boardId, emailColId, email) {
-  console.log(`Updating item ${itemId} with email: ${email}`);
   const value = JSON.stringify({ email: email, text: email });
   const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const query = `mutation {
@@ -94,7 +98,9 @@ async function updateInsuranceEmail(itemId, boardId, emailColId, email) {
       id
     }
   }`;
-  return mondayQuery(query);
+  const result = await mondayQuery(query);
+  console.log("Update result:", JSON.stringify(result));
+  return result;
 }
 
 app.post("/webhook", async (req, res) => {
@@ -118,20 +124,23 @@ app.post("/webhook", async (req, res) => {
       relationColId = NEGOTIATIONS_RELATION_COL;
       emailColId = NEGOTIATIONS_EMAIL_COL;
     } else {
-      console.log("Ignored - column:", columnId);
       return res.json({ status: "ignored" });
     }
 
+    // Wait 3 seconds for monday.com to save the value
+    console.log("Waiting 3 seconds for monday.com to save...");
+    await sleep(3000);
+
     const insuranceId = await getConnectedInsuranceId(pulseId, relationColId);
-    console.log("Insurance ID found:", insuranceId);
+    console.log("Insurance ID:", insuranceId);
     if (!insuranceId) {
       return res.json({ status: "no insurance company connected" });
     }
 
     const email = await getInsuranceEmail(insuranceId);
-    console.log("Email found:", email);
+    console.log("Email:", email);
     if (!email) {
-      return res.json({ status: "no email found for this insurance company" });
+      return res.json({ status: "no email found" });
     }
 
     await updateInsuranceEmail(pulseId, boardId, emailColId, email);
